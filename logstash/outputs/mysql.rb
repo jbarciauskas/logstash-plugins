@@ -42,15 +42,17 @@ class LogStash::Outputs::Mysql < LogStash::Outputs::Base
   milestone 1
 
   # Command line to execute via subprocess. Use dtach or screen to make it non blocking
-  config :username, :validate => :string, :required => true
-  config :password, :validate => :string, :required => true
   config :table_name, :validate => :string, :required => true
 
   # Of the format column_name => field_name
   config :column_map, :validate => :hash, :required => true, :default => {}
 
-  # of the form jdbc:mysql://#{host}:#{port}/#{database}
-  config :jdbc_connection_string, :validate => :string, :required => true
+  config :host, :validate => :string, :default => "localhost"
+  config :port, :validate => :number, :default => 3306
+  config :username, :validate => :string, :default => "root"
+  config :password, :validate => :string, :default => ""
+  config :database, :validate => :string, :required => true
+  config :ssl, :validate => :boolean, :default => true
 
   config :insert_ignore, :validate => :boolean, :default => false
 
@@ -63,21 +65,23 @@ class LogStash::Outputs::Mysql < LogStash::Outputs::Base
 
   public
   def register
-    @logger.info("New bsd_queue output", :username => @username,
-                 :jdbc_connection_string => @jdbc_connection_string)
+    @logger.info("New mysql output", :username => @username,
+                 :host => @host, :port => @port, :database => @database)
 
     buffer_initialize(
       :max_items => @flush_size,
       :max_interval => @idle_flush_timeout,
       :logger => @logger
     )
-    begin
-      @connection = java.sql.DriverManager.getConnection(@jdbc_connection_string, @username, @password)
-      if(@connection)
-        logger.info("Successfully connected")
+  end
+
+  def connect()
+    if(@connection == nil || @connection.is_closed?)
+      jdbc_connection_string = "jdbc:mysql://#{@host}:#{@port}/#{@database}"
+      @connection = java.sql.DriverManager.getConnection(jdbc_connection_string, @username, @password)
+      if(!@connection.is_closed?)
+        logger.info("Successfully connected to #{jdbc_connection_string}")
       end
-    rescue Exception => e
-      @logger.error(e)
     end
   end
 
@@ -89,6 +93,7 @@ class LogStash::Outputs::Mysql < LogStash::Outputs::Base
   end # def receive
 
   def flush(events, teardown=false)
+    connect
     event_rows = []
 
     events.each do |event|
@@ -111,6 +116,7 @@ class LogStash::Outputs::Mysql < LogStash::Outputs::Base
     @logger.info("Generated SQL", :sql => sql)
     stmt = @connection.createStatement
     stmt.execute(sql)
+    logger.info("Number of rows updated", :num_rows => stmt.update_count)
     stmt.close
   end # def flush
 
