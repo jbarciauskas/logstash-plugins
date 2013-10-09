@@ -5,24 +5,36 @@ require "rubygems"
 require "jdbc/mysql"
 require "stud/buffer"
 
-
 java_import "com.mysql.jdbc.Driver"
 
-# This output will run a command for any matching event.
+# This output will perform a bulk insert of rows into a MySQL table
 #
 # Example:
-# 
-#     output {
-#       exec {
-#         type => abuse
-#         command => "iptables -A INPUT -s %{clientip} -j DROP"
-#       }
-#     }
+#  mysql {
+#    username => "root"
+#    password => ""
+#    table_name => "test"
 #
-# Run subprocesses via system ruby function
+#    # maps column 'col1' to log field 'foo', column 'col2' to log field 'bar', and column 'create_dt' to log field '@timestamp'
+#    column_map => ["col1", "foo", "col2", "bar", "create_dt", "@timestamp"]
 #
-# WARNING: if you want it non-blocking you should use & or dtach or other such
-# techniques
+#    # of the form jdbc:mysql://#{host}:#{port}/#{database}
+#    jdbc_connection_string => "jdbc:mysql://localhost:3306/test"
+#
+#    #Ignore errors such as duplicate key warnings, etc - useful if you want to prevent duplicate inserts using a natural key
+#    insert_ignore => true
+#
+#    # Batch insert settings
+#    flush_size => 10
+#    idle_flush_time => 1
+#  }
+#
+#  Batching is tunable via flush_size (number of inserts to batch at once) and idle_flush_time (maximum time between flushes, in seconds)
+#
+#  @TODO Add support for SSL
+#  @TODO Add support for native ruby mysql (Mysql2)
+#  @TODO Actually make use of prepared statements?
+#
 class LogStash::Outputs::Mysql < LogStash::Outputs::Base
   include Stud::Buffer
 
@@ -32,15 +44,21 @@ class LogStash::Outputs::Mysql < LogStash::Outputs::Base
   # Command line to execute via subprocess. Use dtach or screen to make it non blocking
   config :username, :validate => :string, :required => true
   config :password, :validate => :string, :required => true
-  config :jdbc_connection_string, :validate => :string, :required => true
-  config :flush_size, :validate => :number, :default => 10
-
-  # The amount of time since last flush before a flush is forced.
-  config :idle_flush_time, :validate => :number, :default => 1
   config :table_name, :validate => :string, :required => true
 
   # Of the format column_name => field_name
   config :column_map, :validate => :hash, :required => true, :default => {}
+
+  # of the form jdbc:mysql://#{host}:#{port}/#{database}
+  config :jdbc_connection_string, :validate => :string, :required => true
+
+  config :insert_ignore, :validate => :boolean, :default => false
+
+  # Maximum number of events (rows) to insert at once
+  config :flush_size, :validate => :number, :default => 10
+  # The amount of time since last flush before a flush is forced.
+  config :idle_flush_time, :validate => :number, :default => 1
+
 
 
   public
@@ -83,7 +101,13 @@ class LogStash::Outputs::Mysql < LogStash::Outputs::Base
       event_rows.push("('#{event_columns.join("','")}')")
     end
 
-    sql = "INSERT INTO #{@table_name} (#{@column_map.keys.join(',')}) VALUES #{event_rows.join(",")}"
+    if(@insert_ignore)
+      sql = "INSERT IGNORE "
+    else
+      sql = "INSERT "
+    end
+    sql += "INTO #{@table_name} (#{@column_map.keys.join(',')}) VALUES #{event_rows.join(",")}"
+
     @logger.info("Generated SQL", :sql => sql)
     stmt = @connection.createStatement
     stmt.execute(sql)
