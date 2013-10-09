@@ -38,6 +38,8 @@ class LogStash::Outputs::Mysql < LogStash::Outputs::Base
   # The amount of time since last flush before a flush is forced.
   config :idle_flush_time, :validate => :number, :default => 1
   config :table_name, :validate => :string, :required => true
+
+  # Of the format column_name => field_name
   config :column_map, :validate => :hash, :required => true, :default => {}
 
 
